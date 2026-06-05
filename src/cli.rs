@@ -9,26 +9,8 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Install a specific Flutter version (e.g., "3.29.0", "stable", "beta")
-    Install {
-        version: String,
-        /// Re-download even if cached
-        #[arg(short, long)]
-        force: bool,
-    },
-    /// Use a version in the current project (creates .dartup.json)
-    Use {
-        version: String,
-        /// Set as global default instead of project-local
-        #[arg(short)]
-        global: bool,
-    },
-    /// List installed Flutter versions
-    List,
     /// Show currently active Flutter version
     Current,
-    /// Remove an installed version
-    Remove { version: String },
     /// List available Flutter releases from the official channel
     Releases {
         /// Show all releases (not just recent)
@@ -39,4 +21,39 @@ pub enum Commands {
     Gc,
     /// Check that dartup is set up correctly
     Doctor,
+    /// Set the global default Flutter toolchain (e.g., "3.29.0", "stable")
+    Default { version: Option<String> },
+    /// Set or list directory-specific overrides
+    Override {
+        #[command(subcommand)]
+        command: OverrideCommands,
+    },
+    /// Manage Flutter SDK toolchains (versions/channels)
+    Toolchain {
+        #[command(subcommand)]
+        command: ToolchainCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum OverrideCommands {
+    /// Set a directory-specific override (stored in .dartup/override)
+    Set { version: String },
+    /// List active overrides in parent directories
+    List,
+}
+
+#[derive(Subcommand)]
+pub enum ToolchainCommands {
+    /// Install a Flutter SDK toolchain (e.g., "3.29.0", "stable", "beta")
+    Install {
+        version: String,
+        /// Re-download even if cached
+        #[arg(short, long)]
+        force: bool,
+    },
+    /// Remove an installed Flutter toolchain
+    Remove { version: String },
+    /// List installed Flutter toolchains
+    List,
 }

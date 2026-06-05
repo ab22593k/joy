@@ -5,6 +5,7 @@ mod environment;
 mod install;
 mod project;
 mod releases;
+mod toolchain;
 mod util;
 
 use anyhow::Result;
@@ -20,19 +21,24 @@ fn main() -> Result<()> {
     std::fs::create_dir_all(config::git_cache_dir())?;
 
     match cli.command {
-        Commands::Install { version, force } => install::install_version(&version, force),
-        Commands::Use { version, global } => {
-            if global {
-                environment::set_global(&version)
-            } else {
-                project::set_project_version(&version)
-            }
-        }
-        Commands::List => environment::list_versions(),
         Commands::Current => environment::show_current(),
-        Commands::Remove { version } => environment::remove_version(&version),
         Commands::Releases { all } => releases::list_releases(all),
         Commands::Gc => cache::run_gc(),
         Commands::Doctor => environment::run_doctor(),
+        Commands::Default { version } => match version {
+            Some(v) => toolchain::set_default(&v),
+            None => toolchain::show_default(),
+        },
+        Commands::Override { command } => match command {
+            cli::OverrideCommands::Set { version } => toolchain::set_override(&version),
+            cli::OverrideCommands::List => toolchain::list_overrides(),
+        },
+        Commands::Toolchain { command } => match command {
+            cli::ToolchainCommands::Install { version, force } => {
+                toolchain::install(&version, force)
+            }
+            cli::ToolchainCommands::Remove { version } => toolchain::remove(&version),
+            cli::ToolchainCommands::List => toolchain::list(),
+        },
     }
 }

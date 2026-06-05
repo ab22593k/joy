@@ -31,6 +31,17 @@ pub fn global_default_path() -> PathBuf {
 /// Per-project config file name
 pub const PROJECT_CONFIG_FILE: &str = ".dartup.json";
 
+/// Directory name for override storage
+pub const OVERRIDE_DIR: &str = ".dartup";
+
+/// Override file name inside .dartup/
+pub const OVERRIDE_FILE: &str = "override";
+
+/// Path to the override file for a given project directory
+pub fn override_path(project_root: &std::path::Path) -> std::path::PathBuf {
+    project_root.join(OVERRIDE_DIR).join(OVERRIDE_FILE)
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ProjectConfig {
     pub version: String,
