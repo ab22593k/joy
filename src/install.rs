@@ -27,6 +27,7 @@ pub(crate) fn download_with_progress(url: &str, dest: &Path) -> Result<()> {
             .unwrap()
             .progress_chars("#>-"),
     );
+
     pb.set_message(format!(
         "Downloading {}",
         url.split('/').next_back().unwrap_or(url)
@@ -341,7 +342,10 @@ pub fn update_toolchain(version: &str, repo_url: Option<&str>) -> Result<()> {
         anyhow::bail!("git fetch failed: {stderr}");
     }
 
-    // Step 5: Reset the worktree's HEAD to the target ref
+    // Step 5: Save current engine version before reset (to detect changes)
+    let old_engine_ver = engine_cache::read_engine_version(&env_dir).ok();
+
+    // Step 6: Reset the worktree's HEAD to the target ref
     let reset = std::process::Command::new("git")
         .args([
             OsStr::new("--git-dir"),
@@ -359,17 +363,34 @@ pub fn update_toolchain(version: &str, repo_url: Option<&str>) -> Result<()> {
         anyhow::bail!("git reset --hard failed in worktree: {stderr}");
     }
 
-    // Step 6: Re-check engine version, re-download if changed
+    // Step 7: Re-check engine version, re-download if changed
     if let Ok(new_engine_ver) = engine_cache::read_engine_version(&env_dir) {
         let engine_cached = engine_cache::engine_dir(&new_engine_ver).exists();
-        if !engine_cached {
+        let engine_corrupted = engine_cached
+            && engine_cache::verify_engine_integrity(&engine_cache::engine_dir(&new_engine_ver))
+                .is_err();
+
+        if engine_corrupted {
+            println!("⚠️  Engine {new_engine_ver} cache is corrupted, re-downloading...");
+            if let Err(e) = engine_cache::download_engine(&new_engine_ver) {
+                eprintln!("⚠️  Engine re-download failed: {e}");
+            }
+        } else if !engine_cached {
             println!("⚙️  Downloading updated engine {new_engine_ver}...");
             if let Err(e) = engine_cache::download_engine(&new_engine_ver) {
                 eprintln!("⚠️  Engine download failed: {e}");
             }
         }
-        if let Err(e) = engine_cache::symlink_engine(&env_dir, &new_engine_ver) {
-            eprintln!("⚠️  Could not symlink engine: {e}");
+
+        let engine_changed = old_engine_ver.as_deref() != Some(&new_engine_ver);
+        if engine_changed || engine_corrupted {
+            if let Some(ref old) = old_engine_ver
+                && old != &new_engine_ver {
+                    println!("🔁 Engine updated: {old} → {new_engine_ver}");
+                }
+            if let Err(e) = engine_cache::symlink_engine(&env_dir, &new_engine_ver) {
+                eprintln!("⚠️  Could not symlink engine: {e}");
+            }
         }
     }
 
@@ -899,6 +920,184 @@ mod tests {
         assert!(
             !engine_link.exists(),
             "no engine.version so no engine symlink expected"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_update_detects_engine_version_mismatch() {
+        let branch = "eng-mismatch";
+        let old_engine = "eng-mismatch-v1";
+        let new_engine = "eng-mismatch-v2";
+
+        let (_tmp, dartup_home) = setup_dartup_home();
+        let remote_dir = dartup_home.join("remote");
+
+        let repo = git2::Repository::init(&remote_dir).unwrap();
+        let sig = git2::Signature::now("test", "test@test.com").unwrap();
+
+        // v1 commit with old_engine
+        std::fs::create_dir_all(remote_dir.join("bin").join("internal")).unwrap();
+        std::fs::write(
+            remote_dir.join("bin").join("flutter"),
+            b"#!/bin/sh\necho v1",
+        )
+        .unwrap();
+        std::fs::write(
+            remote_dir
+                .join("bin")
+                .join("internal")
+                .join("engine.version"),
+            old_engine.as_bytes(),
+        )
+        .unwrap();
+        let mut index = repo.index().unwrap();
+        index
+            .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let oid1 = repo
+            .commit(Some("HEAD"), &sig, &sig, "v1", &tree, &[])
+            .unwrap();
+        let commit1 = repo.find_commit(oid1).unwrap();
+        repo.branch(branch, &commit1, false).unwrap();
+
+        pre_populate_engine(&dartup_home, old_engine);
+
+        install_version_git(branch, Some(remote_dir.to_str().unwrap()), false).unwrap();
+        let env_dir = config::envs_dir().join(branch);
+
+        let engine_link = env_dir.join("bin").join("cache").join("engine");
+        assert!(engine_link.is_symlink(), "v1 should have engine symlink");
+        let link_target = std::fs::read_link(&engine_link).unwrap();
+        assert!(
+            link_target.ends_with(old_engine),
+            "v1 should point to old engine"
+        );
+
+        // v2 commit with new_engine — parent is commit1
+        std::fs::write(
+            remote_dir.join("bin").join("flutter"),
+            b"#!/bin/sh\necho v2",
+        )
+        .unwrap();
+        std::fs::write(
+            remote_dir
+                .join("bin")
+                .join("internal")
+                .join("engine.version"),
+            new_engine.as_bytes(),
+        )
+        .unwrap();
+        let mut index2 = repo.index().unwrap();
+        index2
+            .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
+        index2.write().unwrap();
+        let tree2 = repo.find_tree(index2.write_tree().unwrap()).unwrap();
+        let oid2 = repo
+            .commit(Some("HEAD"), &sig, &sig, "v2", &tree2, &[&commit1])
+            .unwrap();
+        let commit2 = repo.find_commit(oid2).unwrap();
+        repo.branch(branch, &commit2, true).unwrap();
+
+        pre_populate_engine(&dartup_home, new_engine);
+
+        std::mem::drop(tree);
+        std::mem::drop(tree2);
+        std::mem::drop(commit1);
+        std::mem::drop(commit2);
+        std::mem::drop(repo);
+
+        super::update_toolchain(branch, Some(remote_dir.to_str().unwrap())).unwrap();
+
+        let updated_target = std::fs::read_link(&engine_link).unwrap();
+        assert!(
+            updated_target.ends_with(new_engine),
+            "after update, engine should point to new engine, got: {}",
+            updated_target.display()
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_update_keeps_existing_engine_when_version_unchanged() {
+        let branch = "eng-same";
+        let engine_ver = "eng-same-v1";
+
+        let (_tmp, dartup_home) = setup_dartup_home();
+        let remote_dir = dartup_home.join("remote");
+
+        let repo = git2::Repository::init(&remote_dir).unwrap();
+        let sig = git2::Signature::now("test", "test@test.com").unwrap();
+
+        // v1 commit
+        std::fs::create_dir_all(remote_dir.join("bin").join("internal")).unwrap();
+        std::fs::write(
+            remote_dir.join("bin").join("flutter"),
+            b"#!/bin/sh\necho v1",
+        )
+        .unwrap();
+        std::fs::write(
+            remote_dir
+                .join("bin")
+                .join("internal")
+                .join("engine.version"),
+            engine_ver.as_bytes(),
+        )
+        .unwrap();
+        let mut index = repo.index().unwrap();
+        index
+            .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let oid1 = repo
+            .commit(Some("HEAD"), &sig, &sig, "v1", &tree, &[])
+            .unwrap();
+        let commit1 = repo.find_commit(oid1).unwrap();
+        repo.branch(branch, &commit1, false).unwrap();
+
+        pre_populate_engine(&dartup_home, engine_ver);
+
+        install_version_git(branch, Some(remote_dir.to_str().unwrap()), false).unwrap();
+        let env_dir = config::envs_dir().join(branch);
+
+        let engine_link = env_dir.join("bin").join("cache").join("engine");
+        assert!(engine_link.is_symlink(), "should have engine symlink");
+        let link_target = std::fs::read_link(&engine_link).unwrap();
+
+        // v2 commit — same engine version
+        std::fs::write(
+            remote_dir.join("bin").join("flutter"),
+            b"#!/bin/sh\necho v2",
+        )
+        .unwrap();
+        let mut index2 = repo.index().unwrap();
+        index2
+            .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
+        index2.write().unwrap();
+        let tree2 = repo.find_tree(index2.write_tree().unwrap()).unwrap();
+        let oid2 = repo
+            .commit(Some("HEAD"), &sig, &sig, "v2", &tree2, &[&commit1])
+            .unwrap();
+        let commit2 = repo.find_commit(oid2).unwrap();
+        repo.branch(branch, &commit2, true).unwrap();
+
+        std::mem::drop(tree);
+        std::mem::drop(tree2);
+        std::mem::drop(commit1);
+        std::mem::drop(commit2);
+        std::mem::drop(repo);
+
+        super::update_toolchain(branch, Some(remote_dir.to_str().unwrap())).unwrap();
+
+        let after_target = std::fs::read_link(&engine_link).unwrap();
+        assert_eq!(
+            after_target, link_target,
+            "engine symlink should be unchanged when version stays the same"
         );
     }
 }

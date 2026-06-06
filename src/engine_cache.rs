@@ -22,17 +22,14 @@ pub fn read_engine_version(env_dir: &Path) -> Result<String> {
     Ok(content.trim().to_string())
 }
 
-/// Symlink a toolchain's bin/cache/engine to the central cached engine.
-pub fn symlink_engine(env_dir: &Path, engine_version: &str) -> Result<()> {
-    let engine_cache_path = engine_dir(engine_version);
+/// Symlink a toolchain's bin/cache/engine to a cached engine at a given path.
+fn symlink_engine_to(env_dir: &Path, engine_cache_path: &Path, engine_version: &str) -> Result<()> {
     let engine_link = env_dir.join("bin").join("cache").join("engine");
 
-    if !engine_cache_path.exists() {
-        anyhow::bail!(
-            "Engine {engine_version} is not cached at {}",
-            engine_cache_path.display()
-        );
-    }
+    verify_engine_integrity(engine_cache_path).context(format!(
+        "Engine {engine_version} cache is corrupted at {}",
+        engine_cache_path.display()
+    ))?;
 
     if engine_link.exists() || engine_link.is_symlink() {
         if engine_link.is_symlink() || engine_link.is_file() {
@@ -46,9 +43,23 @@ pub fn symlink_engine(env_dir: &Path, engine_version: &str) -> Result<()> {
         std::fs::create_dir_all(parent)?;
     }
 
-    symlink_dir(&engine_cache_path, &engine_link).context("Failed to create engine symlink")?;
+    symlink_dir(engine_cache_path, &engine_link).context("Failed to create engine symlink")?;
 
     Ok(())
+}
+
+/// Symlink a toolchain's bin/cache/engine to the central cached engine.
+pub fn symlink_engine(env_dir: &Path, engine_version: &str) -> Result<()> {
+    let engine_cache_path = engine_dir(engine_version);
+
+    if !engine_cache_path.exists() {
+        anyhow::bail!(
+            "Engine {engine_version} is not cached at {}",
+            engine_cache_path.display()
+        );
+    }
+
+    symlink_engine_to(env_dir, &engine_cache_path, engine_version)
 }
 
 /// Remove engine symlinks from a toolchain (restores a real directory).
@@ -106,6 +117,35 @@ pub fn adopt_engine_dir(env_dir: &Path, engine_version: &str) -> Result<()> {
     }
     symlink_dir(&dest, &src).context("Failed to symlink adopted engine")?;
 
+    Ok(())
+}
+
+/// Verify that a cached engine directory has valid contents (not empty/corrupted).
+/// Returns Ok(()) if the engine directory contains at least one platform subdirectory with files.
+pub fn verify_engine_integrity(engine_dir: &Path) -> Result<()> {
+    if !engine_dir.exists() {
+        anyhow::bail!("Engine is not cached at {}", engine_dir.display());
+    }
+    if !engine_dir.is_dir() {
+        anyhow::bail!(
+            "Engine path exists but is not a directory: {}",
+            engine_dir.display()
+        );
+    }
+    let entries: Vec<_> = std::fs::read_dir(engine_dir)
+        .context(format!(
+            "Failed to read engine directory {}",
+            engine_dir.display()
+        ))?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .collect();
+    if entries.is_empty() {
+        anyhow::bail!(
+            "Engine cache is empty or corrupted at {}",
+            engine_dir.display()
+        );
+    }
     Ok(())
 }
 
@@ -239,19 +279,62 @@ mod tests {
         make_fake_flutter(&env_dir, engine_ver);
         make_fake_engine_cache(&cache_root, engine_ver);
 
-        // Override cache_dir to use our test cache root
-        // We'll manually create the engine dir and then symlink
         let engine_cache = cache_root.join(engine_ver);
         let engine_link = env_dir.join("bin").join("cache").join("engine");
 
         // Remove the fake engine dir first
         std::fs::remove_dir_all(&engine_link).unwrap();
         std::fs::create_dir_all(engine_link.parent().unwrap()).unwrap();
-        symlink_dir(&engine_cache, &engine_link).unwrap();
+        symlink_engine_to(&env_dir, &engine_cache, engine_ver).unwrap();
 
         assert!(engine_link.is_symlink(), "should be a symlink");
         let target = std::fs::read_link(&engine_link).unwrap();
         assert_eq!(target, engine_cache);
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn test_symlink_engine_rejects_corrupted_empty_cache() {
+        let tmp = temp_dir();
+        let engine_ver = "corrupt-empty";
+        let env_dir = tmp.join("envs").join("ver");
+        let cache_root = tmp.join("engines");
+
+        // Create an empty engine cache dir — no platform subdirectories
+        let cache_dir = cache_root.join(engine_ver);
+        std::fs::create_dir_all(&cache_dir).unwrap();
+
+        make_fake_flutter(&env_dir, engine_ver);
+        let engine_link = env_dir.join("bin").join("cache").join("engine");
+        std::fs::remove_dir_all(&engine_link).unwrap();
+
+        let result = symlink_engine_to(&env_dir, &cache_dir, engine_ver);
+        assert!(result.is_err(), "should reject empty cache");
+        assert!(!engine_link.is_symlink(), "no symlink for corrupted cache");
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn test_symlink_engine_accepts_valid_cache_with_verify() {
+        let tmp = temp_dir();
+        let engine_ver = "valid-with-platform";
+        let env_dir = tmp.join("envs").join("ver");
+        let cache_root = tmp.join("engines");
+
+        // Create a valid engine cache with platform subdirectory
+        let cache_dir = cache_root.join(engine_ver);
+        std::fs::create_dir_all(cache_dir.join("linux-x64")).unwrap();
+        std::fs::write(cache_dir.join("linux-x64").join("libflutter.so"), b"engine").unwrap();
+
+        make_fake_flutter(&env_dir, engine_ver);
+        let engine_link = env_dir.join("bin").join("cache").join("engine");
+        std::fs::remove_dir_all(&engine_link).unwrap();
+
+        symlink_engine_to(&env_dir, &cache_dir, engine_ver).unwrap();
+        assert!(
+            engine_link.is_symlink(),
+            "symlink should be created for valid cache"
+        );
         std::fs::remove_dir_all(&tmp).unwrap();
     }
 
@@ -370,5 +453,48 @@ mod tests {
             url.ends_with("engine.zip"),
             "URL should end with engine.zip"
         );
+    }
+
+    #[test]
+    fn test_verify_integrity_accepts_valid_engine() {
+        let tmp = temp_dir();
+        let engine_root = tmp.join("valid-eng-hash");
+        std::fs::create_dir_all(engine_root.join("linux-x64")).unwrap();
+        std::fs::write(engine_root.join("linux-x64").join("libflutter.so"), b"data").unwrap();
+        let result = verify_engine_integrity(&engine_root);
+        assert!(
+            result.is_ok(),
+            "valid engine should pass integrity: {result:?}"
+        );
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn test_verify_integrity_rejects_empty_engine() {
+        let tmp = temp_dir();
+        let engine_root = tmp.join("empty-eng-hash");
+        std::fs::create_dir_all(&engine_root).unwrap();
+        let result = verify_engine_integrity(&engine_root);
+        assert!(result.is_err(), "empty engine should fail integrity");
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn test_verify_integrity_rejects_missing_engine() {
+        let tmp = temp_dir();
+        let engine_root = tmp.join("missing-eng-hash");
+        let result = verify_engine_integrity(&engine_root);
+        assert!(result.is_err(), "missing engine should fail integrity");
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn test_verify_integrity_rejects_empty_file_instead_of_dir() {
+        let tmp = temp_dir();
+        let engine_root = tmp.join("file-eng-hash");
+        std::fs::write(&engine_root, b"not a directory").unwrap();
+        let result = verify_engine_integrity(&engine_root);
+        assert!(result.is_err(), "file (not dir) should fail integrity");
+        std::fs::remove_dir_all(&tmp).unwrap();
     }
 }
