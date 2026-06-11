@@ -154,12 +154,19 @@ pub fn run_doctor() -> Result<()> {
     println!("{}", "dartup Doctor".bold());
     println!();
 
-    // Check dartup home
-    let home = config::dartup_home();
-    if home.exists() {
-        println!("✅ dartup home: {}", home.display());
+    // Check dartup data and cache directories
+    let data_dir = config::data_root();
+    if data_dir.exists() {
+        println!("✅ Data directory: {}", data_dir.display());
     } else {
-        println!("⚠️  dartup home missing: {}", home.display());
+        println!("⚠️  Data directory missing: {}", data_dir.display());
+    }
+
+    let cache_dir = config::cache_root();
+    if cache_dir.exists() {
+        println!("✅ Cache directory: {}", cache_dir.display());
+    } else {
+        println!("⚠️  Cache directory missing: {}", cache_dir.display());
     }
 
     // Check installed versions

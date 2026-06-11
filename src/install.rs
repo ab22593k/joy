@@ -140,7 +140,7 @@ pub fn install_version(version: &str, force: bool, profile: &Profile) -> Result<
     }
 
     // Create temp directory for download
-    let tmp_dir = config::dartup_home().join(".tmp");
+    let tmp_dir = config::tmp_dir();
     std::fs::create_dir_all(&tmp_dir)?;
 
     let archive_name = download_url
@@ -307,23 +307,31 @@ mod tests {
         dir
     }
 
-    struct DartupHomeGuard(PathBuf);
+    struct XdgGuard(PathBuf);
 
-    impl Drop for DartupHomeGuard {
+    impl Drop for XdgGuard {
         fn drop(&mut self) {
-            // SAFETY: test env var — cleaned up on drop
-            unsafe { std::env::remove_var("DARTUP_HOME") };
+            // SAFETY: test env vars — cleaned up on drop
+            unsafe {
+                std::env::remove_var("XDG_DATA_HOME");
+                std::env::remove_var("XDG_CACHE_HOME");
+            }
             let _ = std::fs::remove_dir_all(&self.0);
         }
     }
 
-    fn setup_dartup_home() -> (DartupHomeGuard, PathBuf) {
+    fn setup_xdg() -> (XdgGuard, PathBuf, PathBuf) {
         let tmp = temp_dir();
-        let home = tmp.join("dartup_home");
-        std::fs::create_dir_all(&home).unwrap();
-        // SAFETY: cleaned up by DartupHomeGuard
-        unsafe { std::env::set_var("DARTUP_HOME", &home) };
-        (DartupHomeGuard(tmp), home)
+        let data_home = tmp.join("xdg").join("data");
+        let cache_home = tmp.join("xdg").join("cache");
+        std::fs::create_dir_all(&data_home).unwrap();
+        std::fs::create_dir_all(&cache_home).unwrap();
+        // SAFETY: cleaned up by XdgGuard
+        unsafe {
+            std::env::set_var("XDG_DATA_HOME", &data_home);
+            std::env::set_var("XDG_CACHE_HOME", &cache_home);
+        }
+        (XdgGuard(tmp), data_home, cache_home)
     }
 
     fn create_test_repo(dir: &Path, tag: &str, engine_ver: &str) {
@@ -352,8 +360,8 @@ mod tests {
         repo.tag(tag, commit.as_object(), &sig, tag, false).unwrap();
     }
 
-    fn pre_populate_engine(home: &Path, engine_ver: &str) {
-        let engine_path = home.join("cache").join("engines").join(engine_ver);
+    fn pre_populate_engine(engine_ver: &str) {
+        let engine_path = config::engine_cache_dir().join(engine_ver);
         std::fs::create_dir_all(engine_path.join("bin")).unwrap();
         std::fs::write(
             engine_path.join("bin").join("flutter_engine"),
@@ -370,8 +378,8 @@ mod tests {
         let tag = "minimal-test-v1";
         let engine_ver = "minimal-engine";
 
-        let (_tmp, dartup_home) = setup_dartup_home();
-        let remote_dir = dartup_home.join("remote");
+        let (_guard, _data_home, _cache_home) = setup_xdg();
+        let remote_dir = temp_dir();
         create_test_repo(&remote_dir, tag, engine_ver);
 
         // Use minimal profile — engine should NOT be downloaded
@@ -400,10 +408,10 @@ mod tests {
         let tag = "default-test-v1";
         let engine_ver = "default-engine";
 
-        let (_tmp, dartup_home) = setup_dartup_home();
-        let remote_dir = dartup_home.join("remote");
+        let (_guard, _data_home, _cache_home) = setup_xdg();
+        let remote_dir = temp_dir();
         create_test_repo(&remote_dir, tag, engine_ver);
-        pre_populate_engine(&dartup_home, engine_ver);
+        pre_populate_engine(engine_ver);
 
         // Default profile — engine should be symlinked
         super::install_version_git_with_profile(
@@ -429,8 +437,8 @@ mod tests {
     #[serial]
     fn test_minimal_profile_and_no_engine_version_works() {
         let tag = "minimal-noeng-v1";
-        let (_tmp, dartup_home) = setup_dartup_home();
-        let remote_dir = dartup_home.join("remote");
+        let (_guard, _data_home, _cache_home) = setup_xdg();
+        let remote_dir = temp_dir();
         let repo = git2::Repository::init(&remote_dir).unwrap();
         std::fs::create_dir_all(remote_dir.join("bin")).unwrap();
         std::fs::write(remote_dir.join("bin").join("flutter"), b"#!/bin/sh").unwrap();

@@ -3,9 +3,9 @@ use crate::profile::Artifact;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
-/// Root of the central engine cache at ~/.dartup/cache/engines/
+/// Root of the central engine cache at {cache_root}/engines/
 pub fn cache_dir() -> PathBuf {
-    config::dartup_home().join("cache").join("engines")
+    config::engine_cache_dir()
 }
 
 /// Path to a specific engine version's cached binaries
@@ -266,7 +266,7 @@ pub fn ensure_artifact(engine_version: &str, artifact: &Artifact) -> Result<Path
     }
 
     std::fs::create_dir_all(&dest)?;
-    let tmp_dir = config::dartup_home().join(".tmp");
+    let tmp_dir = config::tmp_dir();
     std::fs::create_dir_all(&tmp_dir)?;
     let archive_path = tmp_dir.join(format!("engine-{engine_version}-{subdir}.zip"));
 
@@ -286,7 +286,7 @@ pub fn download_engine(engine_version: &str) -> Result<PathBuf> {
     }
 
     let url = engine_download_url(engine_version);
-    let tmp_dir = config::dartup_home().join(".tmp");
+    let tmp_dir = config::tmp_dir();
     std::fs::create_dir_all(&tmp_dir)?;
     let archive_path = tmp_dir.join(format!("engine-{engine_version}.zip"));
 
@@ -343,7 +343,7 @@ pub fn ensure_web_sdk(engine_version: &str) -> Result<()> {
     let dest = engine_dir(engine_version);
     std::fs::create_dir_all(&dest)?;
     let url = artifact_download_url(engine_version, &Artifact::WebEngineCanvaskit);
-    let tmp_dir = config::dartup_home().join(".tmp");
+    let tmp_dir = config::tmp_dir();
     std::fs::create_dir_all(&tmp_dir)?;
     let archive_path = tmp_dir.join(format!("engine-{engine_version}-web-sdk.zip"));
     crate::install::download_with_progress(&url, &archive_path)?;
