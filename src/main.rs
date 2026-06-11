@@ -56,7 +56,7 @@ fn main() -> Result<()> {
                 let profile = Profile::from_str(&profile).unwrap_or_else(|_| Profile::Default);
                 toolchain::install_with_opts(&version, force, git, repo.as_deref(), &profile)
             }
-            cli::ToolchainCommands::Remove { version } => toolchain::remove(&version),
+            cli::ToolchainCommands::Remove { versions } => toolchain::remove_many(&versions),
             cli::ToolchainCommands::List => toolchain::list(),
         },
     }

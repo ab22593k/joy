@@ -68,8 +68,8 @@ pub enum ToolchainCommands {
         #[arg(long, default_value = "default")]
         profile: String,
     },
-    /// Remove an installed Flutter toolchain
-    Remove { version: String },
+    /// Remove one or more installed Flutter toolchains
+    Remove { versions: Vec<String> },
     /// List installed Flutter toolchains
     List,
 }

@@ -19,12 +19,14 @@ pub fn install_with_opts(
     }
 }
 
-/// Remove an installed Flutter toolchain (version/channel)
-pub fn remove(version: &str) -> Result<()> {
-    crate::environment::remove_version(version)
+/// Remove one or more installed Flutter toolchains
+pub fn remove_many(versions: &[String]) -> Result<()> {
+    for version in versions {
+        crate::environment::remove_version(version)?;
+    }
+    Ok(())
 }
 
-/// List installed Flutter toolchains
 pub fn list() -> Result<()> {
     crate::environment::list_versions()
 }
@@ -141,4 +143,69 @@ pub fn list_overrides() -> Result<()> {
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+    use std::path::Path;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static NEXT_ID: AtomicU32 = AtomicU32::new(100);
+
+    fn temp_dir() -> PathBuf {
+        let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("dartup_toolchain_test_{id}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    struct XdgGuard(PathBuf);
+
+    impl Drop for XdgGuard {
+        fn drop(&mut self) {
+            unsafe {
+                std::env::remove_var("XDG_DATA_HOME");
+                std::env::remove_var("XDG_CACHE_HOME");
+            }
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn setup_xdg() -> (XdgGuard, PathBuf, PathBuf) {
+        let tmp = temp_dir();
+        let data_home = tmp.join("xdg").join("data");
+        let cache_home = tmp.join("xdg").join("cache");
+        std::fs::create_dir_all(&data_home).unwrap();
+        std::fs::create_dir_all(&cache_home).unwrap();
+        unsafe {
+            std::env::set_var("XDG_DATA_HOME", &data_home);
+            std::env::set_var("XDG_CACHE_HOME", &cache_home);
+        }
+        (XdgGuard(tmp), data_home, cache_home)
+    }
+
+    fn make_fake_installation_in(envs: &Path, version: &str) {
+        let env_dir = envs.join(version).join("bin");
+        std::fs::create_dir_all(&env_dir).unwrap();
+        std::fs::write(env_dir.join("flutter"), b"#!/bin/sh\necho fake").unwrap();
+    }
+
+    #[test]
+    #[serial]
+    fn test_remove_multiple_versions() {
+        let (_guard, _data, _cache) = setup_xdg();
+        let envs = config::envs_dir();
+
+        make_fake_installation_in(&envs, "v1");
+        make_fake_installation_in(&envs, "v2");
+        assert!(envs.join("v1").exists());
+        assert!(envs.join("v2").exists());
+
+        remove_many(&["v1".to_string(), "v2".to_string()]).unwrap();
+
+        assert!(!envs.join("v1").exists());
+        assert!(!envs.join("v2").exists());
+    }
 }

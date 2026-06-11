@@ -22,7 +22,9 @@ pub fn save_profile(version: &str, profile: &Profile) -> Result<()> {
 mod tests {
     use super::*;
     use crate::profile::Component;
+    use serial_test::serial;
     use std::collections::HashSet;
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicU32, Ordering};
 
     static TEST_COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -32,11 +34,45 @@ mod tests {
         format!("test-ver-{n}")
     }
 
+    fn temp_dir() -> PathBuf {
+        let n = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("dartup_toolchain_meta_test_{n}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    struct XdgGuard(PathBuf);
+
+    impl Drop for XdgGuard {
+        fn drop(&mut self) {
+            unsafe {
+                std::env::remove_var("XDG_DATA_HOME");
+                std::env::remove_var("XDG_CACHE_HOME");
+            }
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn setup_xdg() -> (XdgGuard, PathBuf, PathBuf) {
+        let tmp = temp_dir();
+        let data_home = tmp.join("xdg").join("data");
+        let cache_home = tmp.join("xdg").join("cache");
+        std::fs::create_dir_all(&data_home).unwrap();
+        std::fs::create_dir_all(&cache_home).unwrap();
+        unsafe {
+            std::env::set_var("XDG_DATA_HOME", &data_home);
+            std::env::set_var("XDG_CACHE_HOME", &cache_home);
+        }
+        (XdgGuard(tmp), data_home, cache_home)
+    }
+
     #[test]
+    #[serial]
     fn test_save_profile_full_writes_json() {
+        let (_guard, _data, _cache) = setup_xdg();
         let ver = tmp_version();
-        let path = profile_sidecar_path(&ver);
-        // Ensure clean state
+        let envs = config::envs_dir();
+        let path = envs.join(&ver).join(".profile");
         std::fs::remove_file(&path).ok();
 
         save_profile(&ver, &Profile::Full).unwrap();
@@ -53,9 +89,12 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_save_profile_custom_writes_components() {
+        let (_guard, _data, _cache) = setup_xdg();
         let ver = tmp_version();
-        let path = profile_sidecar_path(&ver);
+        let envs = config::envs_dir();
+        let path = envs.join(&ver).join(".profile");
         std::fs::remove_file(&path).ok();
 
         let custom = Profile::Custom(HashSet::from([Component::Engine, Component::Android]));
