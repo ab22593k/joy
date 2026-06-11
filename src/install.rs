@@ -5,6 +5,7 @@ use crate::profile::Artifact;
 use crate::profile::Profile;
 use crate::releases;
 use crate::toolchain_meta;
+use crate::util::display_path;
 use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::fs::File;
@@ -198,7 +199,7 @@ pub fn install_version(version: &str, force: bool, profile: &Profile) -> Result<
 
     println!(
         "Flutter {version} installed successfully at {}",
-        env_dir.display()
+        display_path(&env_dir)
     );
     Ok(())
 }
@@ -249,7 +250,7 @@ pub fn install_version_git_with_profile(
                         let result = engine_task
                             .join()
                             .map_err(|_| anyhow::anyhow!("Engine download thread panicked"))??;
-                        println!("Engine cached at {}", result.display());
+                        println!("Engine cached at {}", display_path(&result));
                     }
 
                     if let Err(e) = engine_cache::symlink_engine(&env_dir, &engine_ver) {
@@ -286,7 +287,7 @@ pub fn install_version_git_with_profile(
 
     println!(
         "Flutter {version} installed at {} (lightweight worktree)",
-        env_dir.display()
+        display_path(&env_dir)
     );
     Ok(())
 }

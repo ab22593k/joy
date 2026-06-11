@@ -1,5 +1,6 @@
 use crate::config;
 use crate::profile::Artifact;
+use crate::util::display_path;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
@@ -18,11 +19,11 @@ pub fn read_engine_version(env_dir: &Path) -> Result<String> {
     let version_file = env_dir.join("bin").join("internal").join("engine.version");
     let content = std::fs::read_to_string(&version_file).context(format!(
         "Failed to read engine.version from {}",
-        env_dir.display()
+        display_path(env_dir)
     ))?;
     let trimmed = content.trim().to_string();
     if trimmed.is_empty() {
-        anyhow::bail!("engine.version is empty in {}", version_file.display());
+        anyhow::bail!("engine.version is empty in {}", display_path(&version_file));
     }
     Ok(trimmed)
 }
@@ -33,7 +34,7 @@ fn symlink_engine_to(env_dir: &Path, engine_cache_path: &Path, engine_version: &
 
     verify_engine_integrity(engine_cache_path).context(format!(
         "Engine {engine_version} cache is corrupted at {}",
-        engine_cache_path.display()
+        display_path(engine_cache_path)
     ))?;
 
     if engine_link.exists() || engine_link.is_symlink() {
@@ -60,7 +61,7 @@ pub fn symlink_engine(env_dir: &Path, engine_version: &str) -> Result<()> {
     if !engine_cache_path.exists() {
         anyhow::bail!(
             "Engine {engine_version} is not cached at {}",
-            engine_cache_path.display()
+            display_path(&engine_cache_path)
         );
     }
 
@@ -89,7 +90,7 @@ pub fn adopt_engine_dir(env_dir: &Path, engine_version: &str) -> Result<()> {
     let dest = engine_dir(engine_version);
 
     if !src.exists() {
-        anyhow::bail!("No engine directory at {}", src.display());
+        anyhow::bail!("No engine directory at {}", display_path(&src));
     }
 
     if !dest.exists() {
@@ -114,18 +115,18 @@ pub fn adopt_engine_dir(env_dir: &Path, engine_version: &str) -> Result<()> {
 /// Returns Ok(()) if the engine directory contains at least one platform subdirectory with files.
 pub fn verify_engine_integrity(engine_dir: &Path) -> Result<()> {
     if !engine_dir.exists() {
-        anyhow::bail!("Engine is not cached at {}", engine_dir.display());
+        anyhow::bail!("Engine is not cached at {}", display_path(engine_dir));
     }
     if !engine_dir.is_dir() {
         anyhow::bail!(
             "Engine path exists but is not a directory: {}",
-            engine_dir.display()
+            display_path(engine_dir)
         );
     }
     let entries: Vec<_> = std::fs::read_dir(engine_dir)
         .context(format!(
             "Failed to read engine directory {}",
-            engine_dir.display()
+            display_path(engine_dir)
         ))?
         .filter_map(|e| e.ok())
         .filter(|e| e.path().is_dir())
@@ -133,7 +134,7 @@ pub fn verify_engine_integrity(engine_dir: &Path) -> Result<()> {
     if entries.is_empty() {
         anyhow::bail!(
             "Engine cache is empty or corrupted at {}",
-            engine_dir.display()
+            display_path(engine_dir)
         );
     }
     Ok(())
@@ -243,7 +244,7 @@ pub fn ensure_artifact(engine_version: &str, artifact: &Artifact) -> Result<Path
         anyhow::bail!(
             "Web SDK was extracted but {:?} subdirectory is missing at {}",
             artifact,
-            platform_path.display()
+            display_path(&platform_path)
         );
     }
 

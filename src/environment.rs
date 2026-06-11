@@ -2,7 +2,7 @@ use crate::completions;
 use crate::config;
 use crate::engine_cache;
 use crate::git_cache;
-use crate::util::{dir_size, human_size};
+use crate::util::{dir_size, display_path, human_size};
 use anyhow::{Context, Result};
 use colored::Colorize;
 use std::path::PathBuf;
@@ -85,7 +85,7 @@ pub fn show_current() -> Result<()> {
             println!(
                 "Global:  {} -> {}",
                 name.to_string_lossy().green().bold(),
-                target.display()
+                display_path(&target)
             );
         }
     } else {
@@ -123,7 +123,7 @@ pub fn set_global(version: &str) -> Result<()> {
     println!("Global default set to Flutter {}.", version.green().bold());
     println!(
         "   Add {} to your PATH to use 'dartup flutter'",
-        config::envs_dir().join(version).join("bin").display()
+        display_path(config::envs_dir().join(version).join("bin"))
     );
     Ok(())
 }
@@ -155,16 +155,16 @@ pub fn run_doctor() -> Result<()> {
     // Check dartup data and cache directories
     let data_dir = config::data_root();
     if data_dir.exists() {
-        println!("Data directory: {}", data_dir.display());
+        println!("Data directory: {}", display_path(&data_dir));
     } else {
-        println!("Data directory missing: {}", data_dir.display());
+        println!("Data directory missing: {}", display_path(&data_dir));
     }
 
     let cache_dir = config::cache_root();
     if cache_dir.exists() {
-        println!("Cache directory: {}", cache_dir.display());
+        println!("Cache directory: {}", display_path(&cache_dir));
     } else {
-        println!("Cache directory missing: {}", cache_dir.display());
+        println!("Cache directory missing: {}", display_path(&cache_dir));
     }
 
     // Check installed versions
@@ -178,7 +178,7 @@ pub fn run_doctor() -> Result<()> {
     let global = config::global_default_path();
     if global.is_symlink() {
         if let Ok(target) = std::fs::read_link(&global) {
-            println!("Global default -> {}", target.display());
+            println!("Global default -> {}", display_path(&target));
             // Verify the symlink target still exists
             if target.exists() {
                 println!("Global symlink target exists");
@@ -199,7 +199,7 @@ pub fn run_doctor() -> Result<()> {
             "Shared engine cache: {} ({} versions) at {}",
             human_size(engines_size),
             engines_count,
-            engines_path.display()
+            display_path(&engines_path)
         );
     } else {
         println!("No shared engine cache. Engines will be adopted on install.");
@@ -212,7 +212,7 @@ pub fn run_doctor() -> Result<()> {
         println!(
             "Git object cache: {} at {}",
             human_size(git_objects_size),
-            git_path.display()
+            display_path(&git_path)
         );
         if std::fs::read_dir(git_path.join("objects").join("pack"))
             .ok()

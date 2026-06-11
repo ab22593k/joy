@@ -80,7 +80,10 @@ fn main() -> Result<()> {
                     &mut Cli::command(),
                     dir.as_path(),
                 )?;
-                println!("Completions installed to {}", dir.display());
+                println!(
+                    "Completions installed to {}",
+                    crate::util::display_path(&dir)
+                );
                 Ok(())
             }
         },

@@ -1,5 +1,16 @@
 use std::path::Path;
 
+/// Replace the user's home directory with `~` for display.
+pub fn display_path(path: impl AsRef<Path>) -> String {
+    if let Ok(home) = std::env::var("HOME") {
+        let home = Path::new(&home);
+        if let Ok(rest) = path.as_ref().strip_prefix(home) {
+            return format!("~/{}", rest.display());
+        }
+    }
+    path.as_ref().display().to_string()
+}
+
 /// Calculate the total size of a directory recursively
 pub fn dir_size(path: impl AsRef<Path>) -> u64 {
     let mut total = 0u64;

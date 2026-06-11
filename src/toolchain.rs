@@ -1,5 +1,6 @@
 use crate::config;
 use crate::profile::Profile;
+use crate::util::display_path;
 use anyhow::{Context, Result};
 use colored::Colorize;
 use std::path::PathBuf;
@@ -47,7 +48,7 @@ pub fn show_default() {
             "{} {} -> {}",
             "default:".bold(),
             name.to_string_lossy().green().bold(),
-            target.display()
+            display_path(&target)
         );
         return;
     }
@@ -99,9 +100,9 @@ pub fn set_override(version: &str) -> Result<()> {
     println!(
         "Override set: Flutter {} for {}",
         version.green().bold(),
-        cwd.display()
+        display_path(&cwd)
     );
-    println!("   (stored in {})", override_path.display());
+    println!("   (stored in {})", display_path(&override_path));
 
     Ok(())
 }
@@ -122,17 +123,17 @@ pub fn list_overrides() -> Result<()> {
         if is_active {
             println!(
                 "  {} -> {} {}",
-                path.display(),
+                display_path(path),
                 version.green().bold(),
                 "(current)".green()
             );
         } else {
-            println!("  {} -> {}", path.display(), version.bold());
+            println!("  {} -> {}", display_path(path), version.bold());
         }
     }
     println!(
         "\nNearest override: {} -> {}",
-        overrides[0].0.display(),
+        display_path(&overrides[0].0),
         overrides[0].1.green().bold()
     );
 
