@@ -83,9 +83,10 @@ pub fn resolve_active_version() -> Result<String> {
     let global_path = config::global_default_path();
     if global_path.is_symlink()
         && let Ok(target) = std::fs::read_link(&global_path)
-            && let Some(name) = target.file_name() {
-                return Ok(name.to_string_lossy().to_string());
-            }
+        && let Some(name) = target.file_name()
+    {
+        return Ok(name.to_string_lossy().to_string());
+    }
 
     anyhow::bail!("No active toolchain found. Install one with 'joy toolchain install <version>'.")
 }
@@ -119,16 +120,17 @@ pub fn update_active(force: bool) -> Result<()> {
         .max_by_key(|r| &r.release_date);
 
     if let Some(latest) = latest
-        && latest.version != version {
-            println!(
-                "Upgrading Flutter {} -> {}...",
-                version,
-                latest.version.green().bold()
-            );
-            install_with_opts(&latest.version, true, is_git, None, &profile, false)?;
-            update_active_reference(&version, &latest.version)?;
-            return Ok(());
-        }
+        && latest.version != version
+    {
+        println!(
+            "Upgrading Flutter {} -> {}...",
+            version,
+            latest.version.green().bold()
+        );
+        install_with_opts(&latest.version, true, is_git, None, &profile, false)?;
+        update_active_reference(&version, &latest.version)?;
+        return Ok(());
+    }
 
     // Already the latest — reinstall only if --force was passed
     if force {
@@ -161,11 +163,12 @@ fn update_active_reference(old: &str, new: &str) -> Result<()> {
     let local_override = config::override_path(&cwd);
     if local_override.exists()
         && let Ok(content) = std::fs::read_to_string(&local_override)
-            && content.trim() == old {
-                std::fs::write(&local_override, new)?;
-                println!("   Override updated to Flutter {}", new.green().bold());
-                return Ok(());
-            }
+        && content.trim() == old
+    {
+        std::fs::write(&local_override, new)?;
+        println!("   Override updated to Flutter {}", new.green().bold());
+        return Ok(());
+    }
 
     // 2. Parent-directory overrides
     for (dir, ver) in find_overrides(&cwd) {
@@ -181,12 +184,12 @@ fn update_active_reference(old: &str, new: &str) -> Result<()> {
     let global_path = config::global_default_path();
     if global_path.is_symlink()
         && let Ok(target) = std::fs::read_link(&global_path)
-            && let Some(name) = target.file_name()
-                && name == old
-            {
-                crate::environment::set_global(new)?;
-                return Ok(());
-            }
+        && let Some(name) = target.file_name()
+        && name == old
+    {
+        crate::environment::set_global(new)?;
+        return Ok(());
+    }
 
     Ok(())
 }
