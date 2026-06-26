@@ -138,8 +138,9 @@ pub fn remove_version(version: &str) -> Result<()> {
     }
 
     // Check it's not the active global version
-    let current = get_current_version_name();
-    if current == version {
+    if let Some(target) = get_current_symlink_target()?
+        && target == env_dir
+    {
         anyhow::bail!("Cannot remove the active global version. Switch to another version first.");
     }
 
