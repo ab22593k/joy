@@ -117,6 +117,9 @@ pub enum ToolchainCommands {
         /// Installation profile: minimal (SDK only), default (SDK+engine), full (all platforms)
         #[arg(long, default_value = "default")]
         profile: String,
+        /// Skip SHA256 checksum verification after download
+        #[arg(long)]
+        skip_checksum: bool,
     },
     /// Remove one or more installed Flutter toolchains
     Remove { versions: Vec<String> },

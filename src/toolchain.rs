@@ -12,11 +12,18 @@ pub fn install_with_opts(
     git: bool,
     repo: Option<&str>,
     profile: &Profile,
+    skip_checksum: bool,
 ) -> Result<()> {
     if git {
-        crate::install::install_version_git_with_profile(version, repo, force, profile)
+        crate::install::install_version_git_with_profile(
+            version,
+            repo,
+            force,
+            profile,
+            skip_checksum,
+        )
     } else {
-        crate::install::install_version(version, force, profile)
+        crate::install::install_version(version, force, profile, skip_checksum)
     }
 }
 

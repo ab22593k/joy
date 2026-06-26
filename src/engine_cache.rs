@@ -14,6 +14,65 @@ pub fn engine_dir(engine_version: &str) -> PathBuf {
     cache_dir().join(engine_version)
 }
 
+/// Compute the hex-encoded SHA256 of a file.
+fn compute_file_sha256(path: &Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut file = std::fs::File::open(path)
+        .with_context(|| format!("Failed to open {} for SHA256", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 65536];
+    loop {
+        let n = std::io::Read::read(&mut file, &mut buffer)
+            .with_context(|| format!("Failed to read {} for SHA256", path.display()))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buffer[..n]);
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
+/// Verify or save the SHA256 hash of a downloaded archive.
+/// If the sidecar file exists, verify the archive's hash matches it.
+/// If not, compute and save the hash for future verification.
+/// Uses a single pass through the file to avoid double-hashing.
+fn verify_or_save_sha256(
+    archive_path: &Path,
+    sidecar: &Path,
+    label: &str,
+    skip_checksum: bool,
+) -> Result<()> {
+    if skip_checksum {
+        return Ok(());
+    }
+    let hash = compute_file_sha256(archive_path)?;
+
+    if sidecar.exists() {
+        let expected = std::fs::read_to_string(sidecar)
+            .with_context(|| format!("Failed to read SHA256 sidecar {}", sidecar.display()))?;
+        let expected = expected.trim();
+        if expected.is_empty() {
+            anyhow::bail!("SHA256 sidecar is empty: {}", sidecar.display());
+        }
+        if hash != expected {
+            anyhow::bail!(
+                "{} archive corrupt or tampered: expected SHA256 {}, got {}",
+                label,
+                expected,
+                hash
+            );
+        }
+    } else {
+        if let Some(parent) = sidecar.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(sidecar, &hash)
+            .with_context(|| format!("Failed to write SHA256 sidecar {}", sidecar.display()))?;
+    }
+
+    Ok(())
+}
+
 /// Read the engine version string from an installed Flutter SDK
 pub fn read_engine_version(env_dir: &Path) -> Result<String> {
     let version_file = env_dir.join("bin").join("internal").join("engine.version");
@@ -233,9 +292,13 @@ pub fn artifact_subdir(artifact: &Artifact) -> &'static str {
 
 /// Ensure a specific artifact is cached. Downloads it if not present.
 /// Returns the path to the cached artifact's platform subdirectory.
-pub fn ensure_artifact(engine_version: &str, artifact: &Artifact) -> Result<PathBuf> {
+pub fn ensure_artifact(
+    engine_version: &str,
+    artifact: &Artifact,
+    skip_checksum: bool,
+) -> Result<PathBuf> {
     if is_web_artifact(artifact) {
-        ensure_web_sdk(engine_version)?;
+        ensure_web_sdk(engine_version, skip_checksum)?;
         let subdir = artifact_subdir(artifact);
         let platform_path = engine_dir(engine_version).join(subdir);
         if platform_path.exists() {
@@ -278,6 +341,17 @@ pub fn ensure_artifact(engine_version: &str, artifact: &Artifact) -> Result<Path
     let archive_path = tmp_dir.join(format!("engine-{engine_version}-{subdir}.zip"));
 
     crate::install::download_with_progress(&url, &archive_path)?;
+
+    // Verify against saved SHA256, or save for future verification
+    // Each artifact type gets its own sidecar (e.g., .android-arm64-release.sha256)
+    let sidecar = engine_dir(engine_version).join(format!(".artifact-{subdir}.sha256"));
+    verify_or_save_sha256(
+        &archive_path,
+        &sidecar,
+        &format!("{engine_version}/{subdir}"),
+        skip_checksum,
+    )?;
+
     crate::install::extract_archive(&archive_path, &dest)?;
     std::fs::remove_file(&archive_path)?;
 
@@ -286,7 +360,9 @@ pub fn ensure_artifact(engine_version: &str, artifact: &Artifact) -> Result<Path
 
 /// Download an engine archive into the central cache.
 /// Returns the path to the downloaded archive.
-pub fn download_engine(engine_version: &str) -> Result<PathBuf> {
+/// Verifies the archive against a saved SHA256 if one exists,
+/// or saves the hash for future verification on first download.
+pub fn download_engine(engine_version: &str, skip_checksum: bool) -> Result<PathBuf> {
     let dest = engine_dir(engine_version);
     if dest.exists() {
         return Ok(dest);
@@ -298,6 +374,11 @@ pub fn download_engine(engine_version: &str) -> Result<PathBuf> {
     let archive_path = tmp_dir.join(format!("engine-{engine_version}.zip"));
 
     crate::install::download_with_progress(&url, &archive_path)?;
+
+    // Verify against saved SHA256, or save for future verification
+    let sidecar = engine_dir(engine_version).join(".engine.sha256");
+    verify_or_save_sha256(&archive_path, &sidecar, engine_version, skip_checksum)?;
+
     crate::install::extract_archive(&archive_path, &dest)?;
     std::fs::remove_file(&archive_path)?;
 
@@ -342,7 +423,7 @@ fn extract_web_sdk(archive: &Path, dest: &Path) -> Result<()> {
 /// Downloads `flutter-web-sdk.zip` once, extracts it, and creates a marker file
 /// so that all three web renderer artifacts (`WebEngineCanvaskit`, `WebEngineSkwasm`,
 /// `WebEngineHtml`) share a single download.
-pub fn ensure_web_sdk(engine_version: &str) -> Result<()> {
+pub fn ensure_web_sdk(engine_version: &str, skip_checksum: bool) -> Result<()> {
     let marker = web_sdk_marker(engine_version);
     if marker.exists() {
         return Ok(());
@@ -354,6 +435,17 @@ pub fn ensure_web_sdk(engine_version: &str) -> Result<()> {
     std::fs::create_dir_all(&tmp_dir)?;
     let archive_path = tmp_dir.join(format!("engine-{engine_version}-web-sdk.zip"));
     crate::install::download_with_progress(&url, &archive_path)?;
+
+    // Verify against saved SHA256, or save for future verification
+    // Web SDK has its own sidecar separate from the host engine
+    let sidecar = engine_dir(engine_version).join(".web-sdk.sha256");
+    verify_or_save_sha256(
+        &archive_path,
+        &sidecar,
+        &format!("{engine_version}/web-sdk"),
+        skip_checksum,
+    )?;
+
     extract_web_sdk(&archive_path, &dest)?;
     std::fs::remove_file(&archive_path)?;
     std::fs::write(&marker, b"1")?;
@@ -729,8 +821,8 @@ mod tests {
 
     #[test]
     fn test_ensure_artifact_framework_and_tools_are_not_downloadable() {
-        assert!(ensure_artifact("h", &Artifact::FlutterFramework).is_err());
-        assert!(ensure_artifact("h", &Artifact::HostDevTools).is_err());
+        assert!(ensure_artifact("h", &Artifact::FlutterFramework, false).is_err());
+        assert!(ensure_artifact("h", &Artifact::HostDevTools, false).is_err());
     }
 
     #[test]

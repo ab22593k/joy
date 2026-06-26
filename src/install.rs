@@ -135,7 +135,12 @@ pub(crate) fn verify_sha256(path: &Path, expected_hex: &str) -> Result<()> {
 }
 
 /// Install a specific Flutter version with a given profile
-pub fn install_version(version: &str, force: bool, profile: &Profile) -> Result<()> {
+pub fn install_version(
+    version: &str,
+    force: bool,
+    profile: &Profile,
+    skip_checksum: bool,
+) -> Result<()> {
     crate::util::validate_version(version).map_err(|e| anyhow::anyhow!("{}", e))?;
     let env_dir = config::envs_dir().join(version);
     crate::util::check_path_traversal(&env_dir, &config::envs_dir())
@@ -184,11 +189,13 @@ pub fn install_version(version: &str, force: bool, profile: &Profile) -> Result<
     // Download
     download_with_progress(download_url, &archive_path)?;
 
-    // Verify SHA256 checksum
-    verify_sha256(&archive_path, &release.sha256).context(format!(
-        "SHA256 mismatch for {} — downloaded file is corrupted or incomplete",
-        release.version
-    ))?;
+    // Verify SHA256 checksum (unless skipped)
+    if !skip_checksum {
+        verify_sha256(&archive_path, &release.sha256).context(format!(
+            "SHA256 mismatch for {} — downloaded file is corrupted or incomplete",
+            release.version
+        ))?;
+    }
 
     // Extract
     std::fs::create_dir_all(&env_dir)?;
@@ -247,6 +254,7 @@ pub fn install_version_git_with_profile(
     repo_url: Option<&str>,
     force: bool,
     profile: &Profile,
+    skip_checksum: bool,
 ) -> Result<()> {
     crate::util::validate_version(version).map_err(|e| anyhow::anyhow!("{}", e))?;
     let env_dir = config::envs_dir().join(version);
@@ -285,7 +293,7 @@ pub fn install_version_git_with_profile(
                         println!("Downloading engine {engine_ver}...");
                         let engine_clone = engine_ver.clone();
                         let engine_task = std::thread::spawn(move || {
-                            engine_cache::download_engine(&engine_clone)
+                            engine_cache::download_engine(&engine_clone, skip_checksum)
                         });
                         let result = engine_task
                             .join()
@@ -305,7 +313,7 @@ pub fn install_version_git_with_profile(
                         .join("artifacts")
                         .join(subdir);
                     if !target.exists() {
-                        match engine_cache::ensure_artifact(&engine_ver, &artifact) {
+                        match engine_cache::ensure_artifact(&engine_ver, &artifact, skip_checksum) {
                             Ok(cached) => {
                                 if let Some(parent) = target.parent() {
                                     std::fs::create_dir_all(parent).ok();
@@ -429,6 +437,7 @@ mod tests {
             Some(remote_dir.to_str().unwrap()),
             false,
             &crate::profile::Profile::Minimal,
+            false,
         )
         .unwrap();
 
@@ -460,6 +469,7 @@ mod tests {
             Some(remote_dir.to_str().unwrap()),
             false,
             &crate::profile::Profile::Default,
+            false,
         )
         .unwrap();
 
@@ -502,6 +512,7 @@ mod tests {
             Some(remote_dir.to_str().unwrap()),
             false,
             &crate::profile::Profile::Minimal,
+            false,
         )
         .unwrap();
 

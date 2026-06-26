@@ -94,9 +94,17 @@ fn main() -> Result<()> {
                 git,
                 repo,
                 profile,
+                skip_checksum,
             } => {
                 let profile = Profile::from_str(&profile).unwrap_or_else(|_| Profile::Default);
-                toolchain::install_with_opts(&version, force, git, repo.as_deref(), &profile)
+                toolchain::install_with_opts(
+                    &version,
+                    force,
+                    git,
+                    repo.as_deref(),
+                    &profile,
+                    skip_checksum,
+                )
             }
             cli::ToolchainCommands::Remove { versions } => toolchain::remove_many(&versions),
             cli::ToolchainCommands::List => toolchain::list(),

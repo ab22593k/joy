@@ -3,6 +3,10 @@ use anyhow::{Context, Result};
 use colored::Colorize;
 use serde::Deserialize;
 use std::path::PathBuf;
+use std::time::Duration;
+
+/// How long a cached release list is considered fresh before re-fetching from the network.
+const CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60); // 24 hours
 
 /// The Flutter release API returns a JSON object with releases key.
 #[derive(Deserialize)]
@@ -45,10 +49,30 @@ fn load_cache() -> Option<Vec<ReleaseInfo>> {
     serde_json::from_str(&content).ok()
 }
 
+/// Check whether the cached release list is fresh enough to use without a network call.
+fn is_cache_fresh() -> bool {
+    let path = releases_cache_path();
+    if !path.exists() {
+        return false;
+    }
+    std::fs::metadata(&path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .is_some_and(|mtime| mtime.elapsed().is_ok_and(|age| age < CACHE_TTL))
+}
+
 /// Fetch the list of Flutter releases from Google's storage API.
 /// We pick the correct platform JSON (linux/macos/windows).
-/// Falls back to the disk cache on network failure.
+/// Uses the disk cache if it's fresh (< 24 hours old). Falls back to stale
+/// cache on network failure.
 pub fn fetch_releases() -> Result<Vec<ReleaseInfo>> {
+    // Serve from cache if it's fresh enough — no network call needed
+    if let Some(cached) = load_cache()
+        && is_cache_fresh()
+    {
+        return Ok(cached);
+    }
+
     let os = std::env::consts::OS;
     let url = match os {
         "linux" => {
@@ -69,7 +93,7 @@ pub fn fetch_releases() -> Result<Vec<ReleaseInfo>> {
             Ok(releases)
         }
         Err(remote_err) => {
-            // Network failed — try the cache
+            // Network failed — try the cache (even if stale)
             match load_cache() {
                 Some(cached) => {
                     eprintln!(
@@ -182,4 +206,214 @@ pub fn find_release(version: &str) -> Result<ReleaseInfo> {
         "Could not find Flutter version '{}'. Run 'dartup releases' to see available versions.",
         version
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static NEXT_ID: AtomicU32 = AtomicU32::new(10000);
+
+    fn temp_dir() -> PathBuf {
+        let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("dartup_releases_test_{id}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    struct XdgGuard(PathBuf);
+
+    impl Drop for XdgGuard {
+        fn drop(&mut self) {
+            unsafe {
+                std::env::remove_var("XDG_DATA_HOME");
+                std::env::remove_var("XDG_CACHE_HOME");
+            }
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn setup_xdg() -> XdgGuard {
+        let tmp = temp_dir();
+        let cache_home = tmp.join("xdg").join("cache");
+        std::fs::create_dir_all(&cache_home).unwrap();
+        unsafe {
+            std::env::set_var("XDG_CACHE_HOME", &cache_home);
+        }
+        XdgGuard(tmp)
+    }
+
+    fn sample_releases() -> Vec<ReleaseInfo> {
+        vec![
+            ReleaseInfo {
+                version: "3.29.0".to_string(),
+                channel: "stable".to_string(),
+                archive_url: "https://example.com/flutter_3.29.0.tar.xz".to_string(),
+                sha256: "abc123".to_string(),
+                release_date: "2025-01-15".to_string(),
+            },
+            ReleaseInfo {
+                version: "3.28.0".to_string(),
+                channel: "beta".to_string(),
+                archive_url: "https://example.com/flutter_3.28.0.tar.xz".to_string(),
+                sha256: "def456".to_string(),
+                release_date: "2025-01-01".to_string(),
+            },
+        ]
+    }
+
+    // ---- Save + load roundtrip ----
+
+    #[test]
+    #[serial]
+    fn test_save_and_load_cache_roundtrip() {
+        let _guard = setup_xdg();
+
+        // Cache should not exist yet
+        assert!(load_cache().is_none());
+
+        // Save and reload
+        let releases = sample_releases();
+        save_cache(&releases);
+        let loaded = load_cache().expect("should load saved cache");
+
+        assert!(
+            releases_cache_path().exists(),
+            "cache file should exist after save"
+        );
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].version, "3.29.0");
+        assert_eq!(loaded[1].version, "3.28.0");
+        assert_eq!(
+            loaded[0].archive_url,
+            "https://example.com/flutter_3.29.0.tar.xz"
+        );
+        assert_eq!(loaded[1].sha256, "def456");
+    }
+
+    // ---- Load with no file ----
+
+    #[test]
+    #[serial]
+    fn test_load_cache_returns_none_when_no_file() {
+        let _guard = setup_xdg();
+        assert!(load_cache().is_none(), "no cache file = None");
+    }
+
+    // ---- Load with corrupt file ----
+
+    #[test]
+    #[serial]
+    fn test_load_cache_returns_none_for_corrupt_file() {
+        let _guard = setup_xdg();
+        let path = releases_cache_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"this is not valid json").unwrap();
+        assert!(path.exists(), "corrupt file should exist");
+        assert!(load_cache().is_none(), "corrupt file should return None");
+    }
+
+    // ---- Load with empty array ----
+
+    #[test]
+    #[serial]
+    fn test_load_cache_with_empty_array() {
+        let _guard = setup_xdg();
+        let path = releases_cache_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"[]").unwrap();
+        let loaded = load_cache().expect("empty array should load");
+        assert!(loaded.is_empty(), "empty array should produce empty vec");
+    }
+
+    // ---- Clear cache ----
+
+    #[test]
+    #[serial]
+    fn test_clear_cache_removes_file() {
+        let _guard = setup_xdg();
+        let releases = sample_releases();
+        save_cache(&releases);
+        assert!(
+            releases_cache_path().exists(),
+            "cache should exist after save"
+        );
+
+        clear_cache().unwrap();
+        assert!(
+            !releases_cache_path().exists(),
+            "cache should be removed after clear"
+        );
+        assert!(load_cache().is_none(), "no cache after clear");
+    }
+
+    #[test]
+    #[serial]
+    fn test_clear_cache_is_idempotent() {
+        let _guard = setup_xdg();
+        // Clearing when no cache exists should not error
+        assert!(clear_cache().is_ok());
+    }
+
+    // ---- Cache size ----
+
+    #[test]
+    #[serial]
+    fn test_cache_size_zero_when_no_cache() {
+        let _guard = setup_xdg();
+        assert_eq!(cache_size(), 0, "no cache = size 0");
+    }
+
+    #[test]
+    #[serial]
+    fn test_cache_size_after_save_and_clear() {
+        let _guard = setup_xdg();
+        let releases = sample_releases();
+        save_cache(&releases);
+        assert!(cache_size() > 0, "size should be positive after save");
+
+        clear_cache().unwrap();
+        assert_eq!(cache_size(), 0, "size should be 0 after clear");
+    }
+
+    // ---- Cache freshness ----
+
+    #[test]
+    #[serial]
+    fn test_is_cache_fresh_returns_false_when_no_file() {
+        let _guard = setup_xdg();
+        assert!(!is_cache_fresh(), "no cache file = not fresh");
+    }
+
+    #[test]
+    #[serial]
+    fn test_is_cache_fresh_returns_true_for_recently_saved() {
+        let _guard = setup_xdg();
+        let releases = sample_releases();
+        save_cache(&releases);
+        assert!(is_cache_fresh(), "recently saved cache should be fresh");
+    }
+
+    // ---- Fallback: the cache layer that fetch_releases uses on network failure ----
+    // Covered by test_save_and_load_cache_roundtrip above: save_cache then load_cache
+    // returns the data. This is the same path fetch_releases uses on network failure.
+
+    // ---- ReleaseInfo serialization roundtrip (save uses JSON) ----
+
+    #[test]
+    #[serial]
+    fn test_cache_json_roundtrip() {
+        let _guard = setup_xdg();
+        let releases = sample_releases();
+        save_cache(&releases);
+
+        // Read raw JSON from the cache file and verify it's valid
+        let content = std::fs::read_to_string(releases_cache_path()).unwrap();
+        let deserialized: Vec<ReleaseInfo> = serde_json::from_str(&content).unwrap();
+        assert_eq!(deserialized.len(), 2);
+        assert_eq!(deserialized[0].version, "3.29.0");
+        assert_eq!(deserialized[1].version, "3.28.0");
+    }
 }
