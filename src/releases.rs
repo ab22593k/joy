@@ -2,6 +2,7 @@ use crate::config::ReleaseInfo;
 use anyhow::{Context, Result};
 use colored::Colorize;
 use serde::Deserialize;
+use std::path::PathBuf;
 
 /// The Flutter release API returns a JSON object with releases key.
 #[derive(Deserialize)]
@@ -19,8 +20,34 @@ struct FlutterRelease {
     release_date: String,
 }
 
+/// Path to the cached release list for the current platform.
+pub(crate) fn releases_cache_path() -> PathBuf {
+    let os = std::env::consts::OS;
+    crate::config::releases_cache_dir().join(format!("releases_{os}.json"))
+}
+
+/// Save a release list to the disk cache.
+fn save_cache(releases: &[ReleaseInfo]) {
+    if let Ok(json) = serde_json::to_string(releases) {
+        let dir = crate::config::releases_cache_dir();
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(releases_cache_path(), &json);
+    }
+}
+
+/// Load a release list from the disk cache.
+fn load_cache() -> Option<Vec<ReleaseInfo>> {
+    let path = releases_cache_path();
+    if !path.exists() {
+        return None;
+    }
+    let content = std::fs::read_to_string(&path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
 /// Fetch the list of Flutter releases from Google's storage API.
 /// We pick the correct platform JSON (linux/macos/windows).
+/// Falls back to the disk cache on network failure.
 pub fn fetch_releases() -> Result<Vec<ReleaseInfo>> {
     let os = std::env::consts::OS;
     let url = match os {
@@ -36,6 +63,31 @@ pub fn fetch_releases() -> Result<Vec<ReleaseInfo>> {
         _ => anyhow::bail!("Unsupported OS: {os}"),
     };
 
+    match fetch_releases_from_remote(url) {
+        Ok(releases) => {
+            save_cache(&releases);
+            Ok(releases)
+        }
+        Err(remote_err) => {
+            // Network failed — try the cache
+            match load_cache() {
+                Some(cached) => {
+                    eprintln!(
+                        "Warning: Could not fetch release list (offline?). Using cached data."
+                    );
+                    Ok(cached)
+                }
+                None => {
+                    // No cache either — return the original error
+                    Err(remote_err)
+                }
+            }
+        }
+    }
+}
+
+/// Fetch releases from the remote API, parsing the raw JSON response.
+fn fetch_releases_from_remote(url: &str) -> Result<Vec<ReleaseInfo>> {
     let resp = reqwest::blocking::get(url).context("Failed to fetch Flutter releases list")?;
     let data: FlutterReleasesResponse = resp
         .json()
@@ -60,6 +112,25 @@ pub fn fetch_releases() -> Result<Vec<ReleaseInfo>> {
         .collect();
 
     Ok(releases)
+}
+
+/// Clear the cached release list.
+pub fn clear_cache() -> Result<()> {
+    let path = releases_cache_path();
+    if path.exists() {
+        std::fs::remove_file(&path)?;
+    }
+    Ok(())
+}
+
+/// Return the size of the cached release list in bytes.
+pub fn cache_size() -> u64 {
+    let path = releases_cache_path();
+    if path.exists() {
+        std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
+    } else {
+        0
+    }
 }
 
 /// Display the releases list to stdout

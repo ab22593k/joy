@@ -48,6 +48,11 @@ pub fn tmp_dir() -> PathBuf {
     cache_root().join("tmp")
 }
 
+/// Directory for cached release listings: `{cache_root}/releases`
+pub fn releases_cache_dir() -> PathBuf {
+    cache_root().join("releases")
+}
+
 /// Per-project config file name
 pub const PROJECT_CONFIG_FILE: &str = ".dartup.json";
 

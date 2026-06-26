@@ -2,6 +2,7 @@ use crate::completions;
 use crate::config;
 use crate::engine_cache;
 use crate::git_cache;
+use crate::releases;
 use crate::util::{dir_size, display_path, human_size};
 use anyhow::{Context, Result};
 use colored::Colorize;
@@ -232,6 +233,34 @@ pub fn run_doctor() -> Result<()> {
         println!(
             "No global Git object cache. Create one with 'dartup toolchain install --git <version>'"
         );
+    }
+
+    // Release list cache
+    let releases_cache_path = releases::releases_cache_path();
+    if releases_cache_path.exists() {
+        let releases_size = releases::cache_size();
+        let modified = std::fs::metadata(&releases_cache_path)
+            .and_then(|m| m.modified())
+            .ok();
+        let age = modified.and_then(|t| t.elapsed().ok());
+        let age_str = age
+            .map(|d| {
+                let hours = d.as_secs_f64() / 3600.0;
+                if hours < 1.0 {
+                    format!("{:.0} min", d.as_secs_f64() / 60.0)
+                } else {
+                    format!("{:.1} hours", hours)
+                }
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+        println!(
+            "Release list cache: {} ({}, {} ago)",
+            crate::util::human_size(releases_size),
+            display_path(&releases_cache_path),
+            age_str
+        );
+    } else {
+        println!("Release list cache: {}", "empty".dimmed());
     }
 
     // Shell completions

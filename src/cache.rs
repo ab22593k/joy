@@ -1,5 +1,6 @@
 use crate::engine_cache;
 use crate::git_cache;
+use crate::releases;
 use crate::util::human_size;
 use anyhow::Result;
 use colored::Colorize;
@@ -49,6 +50,19 @@ pub fn run_gc(clean_git: bool, clean_engines: bool) -> Result<()> {
             "Git object cache: {} (use --git to clean)",
             human_size(git_size)
         );
+    }
+
+    // Release list cache (always cleaned during gc, no special flag needed)
+    let releases_size = releases::cache_size();
+    if releases_size > 0 {
+        releases::clear_cache().ok();
+        println!(
+            "  Removed release list cache ({})",
+            human_size(releases_size)
+        );
+        println!("Freed {}", human_size(releases_size).green().bold());
+    } else {
+        println!("No release list cache to clean.");
     }
 
     Ok(())
