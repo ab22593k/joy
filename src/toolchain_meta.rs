@@ -11,6 +11,8 @@ fn profile_sidecar_path(version: &str) -> std::path::PathBuf {
 pub fn save_profile(version: &str, profile: &Profile) -> Result<()> {
     crate::util::validate_version(version).map_err(|e| anyhow::anyhow!("{e}"))?;
     let path = profile_sidecar_path(version);
+    crate::util::check_path_traversal(&path, &config::envs_dir())
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }

@@ -81,6 +81,8 @@ pub fn set_override(version: &str) -> Result<()> {
     crate::util::validate_version(version).map_err(|e| anyhow::anyhow!("{}", e))?;
     // Verify the version is installed
     let env_dir = config::envs_dir().join(version);
+    crate::util::check_path_traversal(&env_dir, &config::envs_dir())
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     if !env_dir.join("bin").join("flutter").exists()
         && !env_dir.join("bin").join("flutter.bat").exists()
     {

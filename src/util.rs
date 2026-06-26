@@ -49,6 +49,33 @@ pub fn validate_version(version: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// After constructing a filesystem path from user-supplied input, canonicalize it
+/// and verify it still resolves within the expected parent directory.
+/// If the path doesn't exist yet, this check is skipped (string-level validation
+/// via `validate_version` handles that case).
+pub fn check_path_traversal(path: &Path, parent: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let canonical_path = std::fs::canonicalize(path)
+        .map_err(|e| format!("Failed to resolve path {}: {}", path.display(), e))?;
+    let canonical_parent = std::fs::canonicalize(parent).map_err(|e| {
+        format!(
+            "Failed to resolve parent directory {}: {}",
+            parent.display(),
+            e
+        )
+    })?;
+    if !canonical_path.starts_with(&canonical_parent) {
+        return Err(format!(
+            "Path {} resolves outside of {}, which is not allowed",
+            path.display(),
+            parent.display()
+        ));
+    }
+    Ok(())
+}
+
 /// Format bytes into a human-readable string
 pub fn human_size(bytes: u64) -> String {
     const UNITS: &[&str] = &["B", "KB", "MB", "GB"];

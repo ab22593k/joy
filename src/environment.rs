@@ -99,6 +99,8 @@ pub fn show_current() -> Result<()> {
 pub fn set_global(version: &str) -> Result<()> {
     crate::util::validate_version(version).map_err(|e| anyhow::anyhow!("{}", e))?;
     let env_dir = config::envs_dir().join(version);
+    crate::util::check_path_traversal(&env_dir, &config::envs_dir())
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     if !env_dir.join("bin").join("flutter").exists()
         && !env_dir.join("bin").join("flutter.bat").exists()
     {
@@ -133,6 +135,8 @@ pub fn set_global(version: &str) -> Result<()> {
 pub fn remove_version(version: &str) -> Result<()> {
     crate::util::validate_version(version).map_err(|e| anyhow::anyhow!("{}", e))?;
     let env_dir = config::envs_dir().join(version);
+    crate::util::check_path_traversal(&env_dir, &config::envs_dir())
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     if !env_dir.exists() {
         anyhow::bail!("Flutter {version} is not installed.");
     }
